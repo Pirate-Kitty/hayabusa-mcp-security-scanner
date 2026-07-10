@@ -335,6 +335,117 @@ def _technique_coverage_payload(raw_technique_id: str) -> dict:
     }
 
 
+def _analyze_coverage(raw_technique_ids: list[str]) -> dict:
+    """Binary local-coverage summary for a batch of technique IDs.
+
+    Reuses _matches_for_technique() per ID — no new matching logic, so this
+    cannot drift from detection://attack/techniques/{id}. A malformed ID is
+    reported per-entry rather than raised, since one bad ID in a batch
+    shouldn't fail the whole call the way the single-ID resource does.
+    """
+    results = []
+    covered_count = 0
+    for raw_id in raw_technique_ids:
+        try:
+            technique_id, matches = _matches_for_technique(raw_id)
+        except ValueError as exc:
+            results.append({"technique_id": raw_id, "error": str(exc)})
+            continue
+        is_covered = len(matches) > 0
+        covered_count += int(is_covered)
+        results.append({
+            "technique_id": technique_id,
+            "coverage": "covered" if is_covered else "not_covered",
+            "matching_rule_count": len(matches),
+            "sample_rule_ids": [r["resource_id"] for r in matches[:_COVERAGE_SAMPLE_CAP]],
+        })
+    return {
+        "requested": len(raw_technique_ids),
+        "covered": covered_count,
+        "not_covered": len(raw_technique_ids) - covered_count,
+        "results": results,
+        "note": (
+            "ID and local rule-coverage facts only, per technique. Coverage is "
+            "binary (covered/not_covered) and says nothing about detection "
+            "quality, tuning, or whether a rule is enabled in a given scan "
+            "profile. This server does not bundle an ATT&CK technique-name/"
+            "tactic dataset, so no such fields are included here."
+        ),
+    }
+
+
+_SUGGEST_RULE_NOTE = (
+    "Guidance and/or a draft rule template only — nothing is written to disk. "
+    "This server does not bundle an ATT&CK technique-name/tactic dataset, so "
+    "no technique name or tactic tag is invented; the template's only ATT&CK "
+    "tag is the literal technique ID supplied by the caller. Coverage here is "
+    "binary (covered/not_covered) and does not imply detection quality, "
+    "tuning, or that any listed rule is enabled in a given scan profile."
+)
+
+
+def _suggest_rule(raw_technique_id: str, title: str | None = None) -> dict:
+    """Read-only guidance for improving local coverage of a technique.
+
+    Never creates or modifies rule files — returns a template as data only.
+    Reuses _matches_for_technique() for coverage (no separate matching logic
+    to drift out of sync with the by-technique resource / analyze_coverage).
+    Does not invent an ATT&CK technique name or tactic tag: this server has
+    no such dataset, so the only tag suggested is the literal technique ID
+    supplied by the caller.
+    """
+    technique_id, matches = _matches_for_technique(raw_technique_id)
+    is_covered = len(matches) > 0
+
+    if is_covered:
+        return {
+            "technique_id": technique_id,
+            "coverage": "covered",
+            "matching_rule_count": len(matches),
+            "guidance": (
+                "Local rules already exist for this technique. Review/tune the "
+                "existing rules below before authoring a new one, to avoid "
+                "duplicate or overlapping detections."
+            ),
+            "existing_rules": [
+                {"resource_id": r["resource_id"], "title": r["title"], "level": r["level"]}
+                for r in matches[:_COVERAGE_SAMPLE_CAP]
+            ],
+            "rule_template": None,
+            "note": _SUGGEST_RULE_NOTE,
+        }
+
+    template_title = (
+        title.strip() if isinstance(title, str) and title.strip() else f"TODO: {technique_id} Detection"
+    )
+    rule_template = {
+        "title": template_title,
+        "id": "<generate-a-new-uuid>",
+        "status": "experimental",
+        "description": f"TODO: describe the behavior this rule detects for {technique_id}.",
+        "logsource": {"product": "windows", "service": "TODO"},
+        "detection": {
+            "selection": {"TODO_field": "TODO_value"},
+            "condition": "selection",
+        },
+        "level": "TODO",
+        "tags": [f"attack.{technique_id.lower()}"],
+    }
+    return {
+        "technique_id": technique_id,
+        "coverage": "not_covered",
+        "matching_rule_count": 0,
+        "guidance": (
+            "No local rule currently matches this technique. The template below "
+            "is a starting skeleton only — it is not written to disk, and every "
+            "TODO field must be filled in and validated before use."
+        ),
+        "existing_rules": [],
+        "rule_template": rule_template,
+        "note": _SUGGEST_RULE_NOTE,
+    }
+
+
 def _parse_detection_uri(uri) -> tuple[str, ...]:
     if uri.scheme != "detection":
         raise ValueError(f"Unsupported resource URI scheme: {uri.scheme!r}")
@@ -475,6 +586,61 @@ async def list_tools() -> list[types.Tool]:
                 },
             },
         ),
+        types.Tool(
+            name="analyze_coverage",
+            description=(
+                "Report local rule coverage for one or more MITRE ATT&CK technique IDs. "
+                "Coverage is a binary covered/not_covered signal based only on whether the "
+                "bundled rule set has a rule tagged with the given technique — it does not "
+                "indicate detection quality, tuning, or whether a rule is enabled in a given "
+                "scan profile. This server does not bundle an ATT&CK technique-name or "
+                "tactic dataset, so no such fields are returned."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "technique_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": (
+                            "One or more MITRE technique IDs (e.g. 'T1003.001'), case-insensitive. "
+                            "A bare parent ID like 'T1003' also counts matches from its "
+                            "sub-techniques, same as detection://attack/techniques/{technique_id}."
+                        ),
+                    },
+                },
+                "required": ["technique_ids"],
+            },
+        ),
+        types.Tool(
+            name="suggest_rule",
+            description=(
+                "Read-only guidance for a MITRE technique ID: if local rules already "
+                "cover it, lists them for review; otherwise returns a draft Sigma-style "
+                "rule template skeleton to fill in. Never creates or modifies any rule "
+                "file — the template is returned as data only. Does not invent an "
+                "ATT&CK technique name or tactic; the only ATT&CK tag used is the "
+                "literal technique ID supplied."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "technique_id": {
+                        "type": "string",
+                        "description": "A single MITRE technique ID (e.g. 'T1003.001'), case-insensitive.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": (
+                            "Optional title to seed the draft rule template's 'title' field "
+                            "when the technique is not yet covered."
+                        ),
+                    },
+                },
+                "required": ["technique_id"],
+            },
+        ),
     ]
 
 
@@ -493,6 +659,17 @@ async def call_tool(name: str, arguments: dict) -> list[types.ContentBlock]:
         keyword = arguments.get("keyword")
         rules = list_rules(keyword)
         return [types.TextContent(type="text", text=json.dumps(rules, indent=2))]
+
+    if name == "analyze_coverage":
+        technique_ids = arguments["technique_ids"]
+        payload = _analyze_coverage(technique_ids)
+        return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
+
+    if name == "suggest_rule":
+        technique_id = arguments["technique_id"]
+        title = arguments.get("title")
+        payload = _suggest_rule(technique_id, title)
+        return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     raise ValueError(f"Unknown tool: {name}")
 
