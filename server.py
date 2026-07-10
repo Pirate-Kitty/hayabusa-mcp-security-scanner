@@ -228,6 +228,26 @@ def _rules_index_payload() -> dict:
     }
 
 
+def _read_rule_yaml_by_id(rule_id: str) -> str:
+    """Return the complete, unparsed YAML text of the rule matching rule_id.
+
+    Deliberately does not re-parse the YAML: the resource's job is to return
+    the rule byte-faithfully, not a normalized/parsed view of it.
+    """
+    _, by_id, duplicate_ids = _get_rule_index()
+    if rule_id in duplicate_ids:
+        paths = duplicate_ids[rule_id]
+        raise ValueError(
+            f"Rule identifier {rule_id!r} is ambiguous: it appears in {len(paths)} "
+            f"rule files {paths}. This indicates a duplicate id: value upstream and "
+            "cannot be resolved to a single rule."
+        )
+    record = by_id.get(rule_id)
+    if record is None:
+        raise ValueError(f"Unknown rule identifier: {rule_id!r}")
+    return (RULES_DIR / record["path"]).read_text(encoding="utf-8")
+
+
 def _parse_detection_uri(uri) -> tuple[str, ...]:
     if uri.scheme != "detection":
         raise ValueError(f"Unsupported resource URI scheme: {uri.scheme!r}")
@@ -253,6 +273,22 @@ async def list_resources() -> list[types.Resource]:
     ]
 
 
+@server.list_resource_templates()
+async def list_resource_templates() -> list[types.ResourceTemplate]:
+    return [
+        types.ResourceTemplate(
+            uriTemplate="detection://rules/{rule_identifier}",
+            name="Single detection rule",
+            description=(
+                "Full YAML text of one rule, addressed by its own YAML id: "
+                "field (UUID), or a fallback-<hash> identifier (see id_source "
+                "in detection://rules) for the rare rule missing one."
+            ),
+            mimeType="application/yaml",
+        ),
+    ]
+
+
 @server.read_resource()
 async def read_resource(uri: types.AnyUrl):
     # Note: unlike call_tool (which wraps exceptions into isError=True
@@ -264,6 +300,10 @@ async def read_resource(uri: types.AnyUrl):
     if segments == ("rules",):
         payload = _rules_index_payload()
         return [ReadResourceContents(content=json.dumps(payload, indent=2), mime_type="application/json")]
+
+    if len(segments) == 2 and segments[0] == "rules":
+        text = _read_rule_yaml_by_id(segments[1])
+        return [ReadResourceContents(content=text, mime_type="application/yaml")]
 
     raise ValueError(f"Unknown resource URI: {uri}")
 

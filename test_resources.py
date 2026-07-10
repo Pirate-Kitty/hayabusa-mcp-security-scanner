@@ -101,12 +101,72 @@ async def test_duplicate_identifiers_excluded_from_lookup():
     print("PASS: duplicate_identifiers_excluded_from_lookup")
 
 
+async def test_list_resource_templates_exposes_rule_identifier_template():
+    handler = server.server.request_handlers[types.ListResourceTemplatesRequest]
+    request = types.ListResourceTemplatesRequest(method="resources/templates/list")
+    result = await handler(request)
+
+    templates = result.root.resourceTemplates
+    uris = [t.uriTemplate for t in templates]
+    assert "detection://rules/{rule_identifier}" in uris, f"missing rule-identifier template: {uris}"
+    print("PASS: list_resource_templates_exposes_rule_identifier_template")
+
+
+async def test_read_single_rule_by_identifier_returns_full_yaml():
+    import yaml as pyyaml
+
+    content = await _read_resource(f"detection://rules/{KNOWN_RULE_ID}")
+    assert content.mimeType == "application/yaml"
+    data = pyyaml.safe_load(content.text)
+    assert data["id"] == KNOWN_RULE_ID
+    assert data["title"] == KNOWN_RULE_TITLE
+    print("PASS: read_single_rule_by_identifier_returns_full_yaml")
+
+
+async def test_read_single_rule_unknown_identifier_raises():
+    try:
+        await _read_resource("detection://rules/does-not-exist")
+    except ValueError:
+        print("PASS: read_single_rule_unknown_identifier_raises")
+        return
+    raise AssertionError("expected ValueError for an unknown rule identifier")
+
+
+async def test_read_duplicate_identifier_raises():
+    original_index, original_by_id, original_dupes = server._RULE_INDEX, server._RULE_INDEX_BY_ID, server._DUPLICATE_RULE_IDS
+    synthetic = [
+        {"id": "dup-uuid", "title": "Rule A", "level": "low", "path": "a.yml"},
+        {"id": "dup-uuid", "title": "Rule B", "level": "high", "path": "b.yml"},
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        server._RULE_INDEX, server._RULE_INDEX_BY_ID, server._DUPLICATE_RULE_IDS = server._build_rule_index(synthetic)
+    try:
+        try:
+            server._read_rule_yaml_by_id("dup-uuid")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError when reading a duplicated identifier")
+    finally:
+        server._RULE_INDEX, server._RULE_INDEX_BY_ID, server._DUPLICATE_RULE_IDS = (
+            original_index,
+            original_by_id,
+            original_dupes,
+        )
+    print("PASS: read_duplicate_identifier_raises")
+
+
 async def main():
     await test_list_resources_exposes_rules_index()
     await test_read_rules_index_shape_and_compactness()
     await test_unknown_resource_uri_raises()
     await test_fallback_identifier_is_marked()
     await test_duplicate_identifiers_excluded_from_lookup()
+    await test_list_resource_templates_exposes_rule_identifier_template()
+    await test_read_single_rule_by_identifier_returns_full_yaml()
+    await test_read_single_rule_unknown_identifier_raises()
+    await test_read_duplicate_identifier_raises()
     print("\nAll tests passed.")
 
 
