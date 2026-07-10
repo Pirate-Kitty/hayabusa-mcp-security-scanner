@@ -142,3 +142,27 @@ Publication cleanup is complete: machine-specific paths and username scrubbed fr
 Remaining:
 1. Create the empty GitHub repository and push `main`
 2. Write up a Medium article covering the build process
+
+## analyze_coverage and suggest_rule tools (2026-07-10)
+
+Added two new MCP tools, both **read-only**, entirely additive on top of the existing two tools and four resources — no existing function, tool, or resource was modified:
+
+- `analyze_coverage` — accepts a batch of MITRE technique IDs and returns per-ID binary coverage (`covered`/`not_covered`) plus match count and sample rule IDs. A malformed ID in the batch is reported per-entry rather than failing the whole call.
+- `suggest_rule` — accepts a single technique ID (plus an optional `title`). If already covered, returns the existing matching rules for review (`rule_template: null`). If not covered, returns a draft Sigma-style rule template as data only — **never writes anything to disk**. The template's only ATT&CK tag is the literal technique ID supplied by the caller; no technique name or tactic is invented.
+
+Both tools are built on the same `_matches_for_technique()` helper already used by `detection://rules/by-technique/{id}` and `detection://attack/techniques/{id}`, so there is no separate matching logic to drift out of sync.
+
+**Tests:** `test_analyze_coverage.py` (6 cases) and `test_suggest_rule.py` (8 cases), including an explicit read-only regression guard for `suggest_rule` that snapshots every rule file's mtime before/after invocation and asserts nothing changed.
+
+**Full regression suite: 41/41 tests passing** across all five test files (15 `test_resources.py` + 5 `test_get_hayabusa_rules.py` + 7 `test_scan_evtx.py` + 6 `test_analyze_coverage.py` + 8 `test_suggest_rule.py`). The two original tools (`scan_evtx`, `get_hayabusa_rules`) and all four existing resources were re-verified working, unchanged.
+
+**One new local commit** exists on `main`, one commit ahead of `origin/main`, not yet pushed. Diff scope confirmed limited to `server.py` (additive only) plus the two new test files; scanned for secrets, PII, credentials, tokens, and private paths — none found; no unexpected files included.
+
+**Known limitations (by design, not bugs):**
+- Coverage is strictly **binary** (`covered`/`not_covered`) in both tools. There is no partial/fractional/percentage coverage concept, and a `covered` result says nothing about detection quality, tuning, false-positive rate, or whether a matching rule is actually enabled in a given scan profile.
+- This server bundles **no ATT&CK technique-name or tactic dataset**. Technique IDs are validated only for correct `Tnnnn(.nnn)` syntax — neither tool can confirm an ID is a real MITRE technique, resolve its name/tactic, or enumerate "all techniques in tactic X". `suggest_rule`'s draft template deliberately omits a tactic tag entirely rather than guess one.
+
+Remaining:
+1. Final review
+2. Exit Claude Code
+3. Push `main` to `origin`
