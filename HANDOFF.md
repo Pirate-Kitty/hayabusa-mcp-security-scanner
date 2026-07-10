@@ -102,6 +102,26 @@ All tests passed.
 - `.claude/settings.json` lists `hayabusa-mcp` in `enabledMcpjsonServers` (auto-approved for this project)
 - Confirmed working live: both `scan_evtx` and `get_hayabusa_rules` have been called through the connected MCP server in a Claude Code session and returned real Hayabusa results
 
+## detection:// resources (2026-07-10)
+
+Added four read-only MCP resources on top of the existing two tools, entirely additive — `run_scan`, `_filter_findings`, `list_rules`, `list_tools`, and `call_tool` are unchanged (`git diff` on `server.py` across all three commits shows additions only):
+
+- `detection://rules` — compact JSON index (`resource_id`, `id_source`, `title`, `level`), capped at 500 rows with `truncated`/`total_rules` flags.
+- `detection://rules/{rule_identifier}` — full YAML text of one rule, byte-faithful (not re-parsed).
+- `detection://rules/by-technique/{technique_id}` — rules tagged with a MITRE technique, with parent-inclusive/sub-technique-exact matching semantics and an explicit `match_type` (`direct` vs `inherited_subtechnique`) per rule.
+- `detection://attack/techniques/{technique_id}` — local coverage facts (`covered`/`not_covered`, match count) only; deliberately does **not** include a technique name/tactic/description, since no ATT&CK dataset is bundled anywhere in this repo (`hayabusa/config/mitre_tactics.txt` only maps tactics, never individual techniques) — a real, flagged product gap rather than a silently-omitted field.
+
+Empirically verified before/while implementing (not assumed):
+- 4,961 rule `.yml` files exist; `list_rules()` successfully parses 4,958 (3 multi-document files are already silently skipped — an existing, unchanged limitation).
+- Bare filenames collide across subdirectories (hundreds of duplicate basenames), so rule identity uses each rule's own YAML `id:` (UUID) instead — confirmed unique across all 4,958 parsed rules today.
+- A deterministic `sha256`-of-path fallback (not Python's per-process-randomized `hash()`) covers the (currently nonexistent) case of a rule missing `id:`; fallback identifiers are marked `id_source: "fallback"` vs `"yaml"`.
+- Duplicate identifiers, if they ever occur, are excluded from direct lookup (never silently resolved to one rule), reported via a `RuntimeWarning` and in the index's `duplicate_ids` field, and raise `ValueError` on a direct lookup attempt.
+- A bare-parent `T1059` query matches 603 rules today, and the fixture rule `4973dea2-3985-affa-babc-f0c00821d2a1` (tagged only `attack.t1003`, no sub-technique tag) proves parent/sub-technique matching is a real scenario, not a hypothetical — this justified both the parent-inclusive matching design and the 500-row response cap (measured: ~150 bytes/row × 500 ≈ 75 KB, well under the limit that a ~300-row broader response already exceeded per the `get_hayabusa_rules` note above).
+
+New test suite `test_resources.py` (21 cases, all passing) exercises the actual registered `ListResourcesRequest`/`ListResourceTemplatesRequest`/`ReadResourceRequest` handlers, following the same convention as `test_scan_evtx.py`/`test_get_hayabusa_rules.py`. One asymmetry worth noting: `read_resource`'s SDK wrapper has no try/except (unlike `call_tool`), so exceptions raised there surface as JSON-RPC protocol errors rather than `isError=True` content results — tests catch them directly rather than inspecting `isError`.
+
+`test_scan_evtx.py` (7 cases) and `test_get_hayabusa_rules.py` (5 cases) still pass unchanged, confirming both existing tools are unaffected. No changes were needed to `requirements.txt`, `manifest.json`, `.mcp.json`, or `.claude/settings.json` — all new code uses only the stdlib plus already-declared dependencies, and resources are just new handlers in the same `server.py` entry point used by both deployment targets.
+
 ## Next step
 
 The Claude Desktop extension is fully set up and confirmed working end-to-end: both `get_hayabusa_rules` (26 Mimikatz matches) and `scan_evtx` (absolute EVTX path, real findings) have been exercised live from Claude Desktop — see "Claude Desktop extension setup" above, including the Linux unpacked-extension `0600` binary-permission issue and its `chmod 755` workaround.
