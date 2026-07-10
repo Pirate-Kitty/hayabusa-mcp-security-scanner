@@ -1,12 +1,15 @@
 import asyncio
+import hashlib
 import json
 import tempfile
+import warnings
 from pathlib import Path
 
 import anyio
 import mcp.types as types
 import yaml
 from mcp.server.lowlevel import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 
 server = Server("hayabusa-mcp")
@@ -17,6 +20,8 @@ RULES_DIR = HAYABUSA_DIR / "rules"
 RULE_SUBDIRS = ("hayabusa", "sigma")
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+_MAX_RESOURCE_ROWS = 500
 
 
 SUMMARY_FIELDS = ("Timestamp", "RuleTitle", "Level", "Computer", "Channel", "EventID", "RecordID", "RuleID")
@@ -133,6 +138,134 @@ def list_rules(keyword: str | None = None) -> list[dict]:
 
     rules.sort(key=lambda r: str(r["title"]).lower())
     return rules
+
+
+_RULE_INDEX: list[dict] | None = None
+_RULE_INDEX_BY_ID: dict[str, dict] | None = None
+_DUPLICATE_RULE_IDS: dict[str, list[str]] | None = None
+
+
+def _derive_rule_identifier(rule_id, relative_path: str) -> tuple[str, str]:
+    """Return (identifier, id_source) for a rule.
+
+    Prefers the rule's own YAML `id:` (a UUID) verbatim. Falls back to a
+    deterministic sha256-of-path identifier when `id` is missing/blank, so
+    every parsed rule stays addressable. Uses hashlib rather than Python's
+    built-in hash(), which is randomized per-process via PYTHONHASHSEED and
+    would produce a different identifier on every server restart.
+    """
+    if isinstance(rule_id, str) and rule_id.strip():
+        return rule_id.strip(), "yaml"
+    digest = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:16]
+    return f"fallback-{digest}", "fallback"
+
+
+def _build_rule_index(records: list[dict]) -> tuple[list[dict], dict[str, dict], dict[str, list[str]]]:
+    """Enrich rule records with a stable resource_id/id_source and detect
+    identifier collisions. Rules whose derived identifier collides with
+    another rule's are excluded from the lookup table entirely (never
+    silently resolved to one of them) and reported in duplicate_ids.
+    """
+    counts: dict[str, int] = {}
+    enriched = []
+    for record in records:
+        identifier, id_source = _derive_rule_identifier(record.get("id"), record["path"])
+        row = {**record, "resource_id": identifier, "id_source": id_source}
+        enriched.append(row)
+        counts[identifier] = counts.get(identifier, 0) + 1
+
+    by_id: dict[str, dict] = {}
+    duplicates: dict[str, list[str]] = {}
+    for row in enriched:
+        identifier = row["resource_id"]
+        if counts[identifier] > 1:
+            duplicates.setdefault(identifier, []).append(row["path"])
+            continue
+        by_id[identifier] = row
+
+    for identifier, paths in duplicates.items():
+        warnings.warn(
+            f"Duplicate rule identifier {identifier!r} found in {len(paths)} rule files "
+            f"{paths}; these rules are excluded from detection://rules/{{rule_identifier}} "
+            "lookups until the conflict is resolved upstream.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return enriched, by_id, duplicates
+
+
+def _get_rule_index() -> tuple[list[dict], dict[str, dict], dict[str, list[str]]]:
+    """Lazily parse and cache the full rule tree once per process lifetime.
+
+    Rules are static for the life of the process; a restart is required to
+    pick up changed/added rule files, matching the existing live-reload
+    caveat that already applies to code changes in this file.
+    """
+    global _RULE_INDEX, _RULE_INDEX_BY_ID, _DUPLICATE_RULE_IDS
+    if _RULE_INDEX is None:
+        _RULE_INDEX, _RULE_INDEX_BY_ID, _DUPLICATE_RULE_IDS = _build_rule_index(list_rules(None))
+    return _RULE_INDEX, _RULE_INDEX_BY_ID, _DUPLICATE_RULE_IDS
+
+
+def _rules_index_payload() -> dict:
+    records, _, duplicate_ids = _get_rule_index()
+    page = records[:_MAX_RESOURCE_ROWS]
+    return {
+        "total_rules": len(records),
+        "returned": len(page),
+        "truncated": len(records) > len(page),
+        "duplicate_ids": duplicate_ids,
+        "rules": [
+            {
+                "resource_id": r["resource_id"],
+                "id_source": r["id_source"],
+                "title": r["title"],
+                "level": r["level"],
+            }
+            for r in page
+        ],
+    }
+
+
+def _parse_detection_uri(uri) -> tuple[str, ...]:
+    if uri.scheme != "detection":
+        raise ValueError(f"Unsupported resource URI scheme: {uri.scheme!r}")
+    path = (uri.path or "").strip("/")
+    segments = [uri.host or ""] + ([s for s in path.split("/") if s] if path else [])
+    return tuple(segments)
+
+
+@server.list_resources()
+async def list_resources() -> list[types.Resource]:
+    return [
+        types.Resource(
+            uri="detection://rules",
+            name="Detection rules index",
+            description=(
+                "Compact JSON index of bundled Hayabusa/Sigma rules "
+                "(resource_id, id_source, title, level only — not full rule "
+                f"bodies). Capped at {_MAX_RESOURCE_ROWS} entries per read; "
+                "see 'truncated'/'total_rules' in the response."
+            ),
+            mimeType="application/json",
+        ),
+    ]
+
+
+@server.read_resource()
+async def read_resource(uri: types.AnyUrl):
+    # Note: unlike call_tool (which wraps exceptions into isError=True
+    # CallToolResults), the MCP SDK's read_resource wrapper has no
+    # try/except — any exception raised here propagates as a JSON-RPC
+    # protocol-level error, not a content-block error.
+    segments = _parse_detection_uri(uri)
+
+    if segments == ("rules",):
+        payload = _rules_index_payload()
+        return [ReadResourceContents(content=json.dumps(payload, indent=2), mime_type="application/json")]
+
+    raise ValueError(f"Unknown resource URI: {uri}")
 
 
 @server.list_tools()
