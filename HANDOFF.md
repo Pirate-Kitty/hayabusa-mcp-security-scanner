@@ -122,6 +122,17 @@ New test suite `test_resources.py` (21 cases, all passing) exercises the actual 
 
 `test_scan_evtx.py` (7 cases) and `test_get_hayabusa_rules.py` (5 cases) still pass unchanged, confirming both existing tools are unaffected. No changes were needed to `requirements.txt`, `manifest.json`, `.mcp.json`, or `.claude/settings.json` — all new code uses only the stdlib plus already-declared dependencies, and resources are just new handlers in the same `server.py` entry point used by both deployment targets.
 
+## Pre-push review (2026-07-10)
+
+- **4 commits created** on `main`, ahead of `origin/main` by exactly 4 (0 behind): `e133355` (rule index cache + `detection://rules`), `3e3404f` (`detection://rules/{rule_identifier}`), `4cbc3c8` (by-technique + coverage resources), `24ff9ea` (README/HANDOFF docs).
+- **33 tests passing**: 7 in `test_scan_evtx.py` + 5 in `test_get_hayabusa_rules.py` (both unchanged from before this work) + 21 in the new `test_resources.py`, all exit 0.
+- **Tools and resources verified live, in-process**: `list_tools` still returns `scan_evtx`/`get_hayabusa_rules`, and `get_hayabusa_rules(keyword="mimikatz")` returns successfully (`isError=False`); `list_resources` returns `detection://rules`, `list_resource_templates` returns all three parameterized templates, and a live read of `detection://rules` succeeds.
+- **Repository confirmed safe to push**: `git status` clean; diff across all 4 commits scanned for emails, IPs, hostnames, secret/token/private-key patterns, and the local username/dirname — nothing found; commit author/committer and `Co-Authored-By` trailers use the repo's existing noreply addresses; only `server.py`, `test_resources.py`, `README.md`, `HANDOFF.md` were touched (no `__pycache__`, `.venv`, `hayabusa/`, `lib/`, `dist/`, or other generated artifacts committed); `.gitignore` remains adequate for this change.
+
+Remaining:
+1. Push `main` to `origin`
+2. Post-push verification — confirm the pushed commits appear correctly on the remote (`git log`/`git diff` against `origin/main` after push), and re-run the live tool/resource checks above against a fresh clone to confirm nothing depended on uncommitted local state
+
 ## Next step
 
 The Claude Desktop extension is fully set up and confirmed working end-to-end: both `get_hayabusa_rules` (26 Mimikatz matches) and `scan_evtx` (absolute EVTX path, real findings) have been exercised live from Claude Desktop — see "Claude Desktop extension setup" above, including the Linux unpacked-extension `0600` binary-permission issue and its `chmod 755` workaround.
