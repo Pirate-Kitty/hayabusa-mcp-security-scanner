@@ -1,0 +1,22 @@
+{
+  "dxt_version": "0.1",
+  "name": "hayabusa-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that wraps Hayabusa for EVTX (Windows Event Log) analysis.",
+  "author": {
+    "name": "Pirate-Kitty"
+  },
+  "server": {
+    "type": "python",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": [
+        "${__dirname}/server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "${__dirname}/lib"
+      }
+    }
+  }
+}
