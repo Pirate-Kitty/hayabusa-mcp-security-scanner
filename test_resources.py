@@ -16,6 +16,15 @@ import server
 KNOWN_RULE_ID = "442c7996-1154-45bd-b203-c20596e7af81"
 KNOWN_RULE_TITLE = "Possible Hidden Shellcode"
 
+# Rule tagged only attack.t1003 (parent, no sub-technique tag).
+PARENT_ONLY_RULE_ID = "4973dea2-3985-affa-babc-f0c00821d2a1"
+# Rule tagged only attack.t1003.001.
+SUBTECHNIQUE_RULE_ID = "5b6e58ee-c231-4a54-9eee-af2577802e08"
+# Rule tagged only attack.t1003.002 — a sibling of SUBTECHNIQUE_RULE_ID under the same parent.
+SIBLING_SUBTECHNIQUE_RULE_ID = "99522854-7b20-5e8d-3c15-f9df0964b49e"
+# Syntactically valid technique ID with no matching rules in the bundled set.
+UNMATCHED_TECHNIQUE_ID = "T9999"
+
 
 async def test_list_resources_exposes_rules_index():
     handler = server.server.request_handlers[types.ListResourcesRequest]
@@ -101,15 +110,19 @@ async def test_duplicate_identifiers_excluded_from_lookup():
     print("PASS: duplicate_identifiers_excluded_from_lookup")
 
 
-async def test_list_resource_templates_exposes_rule_identifier_template():
+async def test_list_resource_templates_exposes_all_three_templates():
     handler = server.server.request_handlers[types.ListResourceTemplatesRequest]
     request = types.ListResourceTemplatesRequest(method="resources/templates/list")
     result = await handler(request)
 
-    templates = result.root.resourceTemplates
-    uris = [t.uriTemplate for t in templates]
-    assert "detection://rules/{rule_identifier}" in uris, f"missing rule-identifier template: {uris}"
-    print("PASS: list_resource_templates_exposes_rule_identifier_template")
+    uris = {t.uriTemplate for t in result.root.resourceTemplates}
+    expected = {
+        "detection://rules/{rule_identifier}",
+        "detection://rules/by-technique/{technique_id}",
+        "detection://attack/techniques/{technique_id}",
+    }
+    assert expected <= uris, f"missing templates: {expected - uris}"
+    print("PASS: list_resource_templates_exposes_all_three_templates")
 
 
 async def test_read_single_rule_by_identifier_returns_full_yaml():
@@ -157,16 +170,97 @@ async def test_read_duplicate_identifier_raises():
     print("PASS: read_duplicate_identifier_raises")
 
 
+async def _by_technique(technique_id: str) -> dict:
+    content = await _read_resource(f"detection://rules/by-technique/{technique_id}")
+    assert content.mimeType == "application/json"
+    return json.loads(content.text)
+
+
+async def _coverage(technique_id: str) -> dict:
+    content = await _read_resource(f"detection://attack/techniques/{technique_id}")
+    assert content.mimeType == "application/json"
+    return json.loads(content.text)
+
+
+def _resource_ids(payload: dict) -> set:
+    return {r["resource_id"] for r in payload["rules"]}
+
+
+async def test_technique_normalization_case_insensitive():
+    lower = await _by_technique("t1003.001")
+    upper = await _by_technique("T1003.001")
+    assert lower == upper
+    assert lower["technique_id"] == "T1003.001"
+    print("PASS: technique_normalization_case_insensitive")
+
+
+async def test_technique_parent_matches_direct_and_subtechnique():
+    payload = await _by_technique("T1003")
+    by_id = {r["resource_id"]: r for r in payload["rules"]}
+
+    assert PARENT_ONLY_RULE_ID in by_id, "expected parent-only-tagged rule to match T1003"
+    assert by_id[PARENT_ONLY_RULE_ID]["match_type"] == "direct"
+
+    assert SUBTECHNIQUE_RULE_ID in by_id, "expected sub-technique-tagged rule to match parent T1003"
+    assert by_id[SUBTECHNIQUE_RULE_ID]["match_type"] == "inherited_subtechnique"
+    print("PASS: technique_parent_matches_direct_and_subtechnique")
+
+
+async def test_technique_subtechnique_excludes_parent_and_siblings():
+    payload = await _by_technique("T1003.001")
+    ids = _resource_ids(payload)
+
+    assert SUBTECHNIQUE_RULE_ID in ids, "expected exact sub-technique match"
+    assert PARENT_ONLY_RULE_ID not in ids, "sub-technique query must not match parent-only tag"
+    assert SIBLING_SUBTECHNIQUE_RULE_ID not in ids, "sub-technique query must not match a sibling sub-technique"
+    print("PASS: technique_subtechnique_excludes_parent_and_siblings")
+
+
+async def test_technique_malformed_id_raises():
+    try:
+        await _by_technique("not-a-technique")
+    except ValueError:
+        print("PASS: technique_malformed_id_raises")
+        return
+    raise AssertionError("expected ValueError for a malformed technique ID")
+
+
+async def test_coverage_status_covered():
+    payload = await _coverage("T1003.001")
+    assert payload["coverage"] == "covered"
+    assert payload["matching_rule_count"] > 0
+    assert set(payload.keys()) == {
+        "technique_id", "coverage", "matching_rule_count", "sample_rule_ids", "note",
+    }
+    forbidden = {"technique_name", "tactic", "description"}
+    assert forbidden.isdisjoint(payload.keys()), f"must not invent ATT&CK metadata: {payload.keys()}"
+    print(f"PASS: coverage_status_covered ({payload['matching_rule_count']} matches)")
+
+
+async def test_coverage_status_not_covered():
+    payload = await _coverage(UNMATCHED_TECHNIQUE_ID)
+    assert payload["coverage"] == "not_covered"
+    assert payload["matching_rule_count"] == 0
+    assert payload["sample_rule_ids"] == []
+    print("PASS: coverage_status_not_covered")
+
+
 async def main():
     await test_list_resources_exposes_rules_index()
     await test_read_rules_index_shape_and_compactness()
     await test_unknown_resource_uri_raises()
     await test_fallback_identifier_is_marked()
     await test_duplicate_identifiers_excluded_from_lookup()
-    await test_list_resource_templates_exposes_rule_identifier_template()
+    await test_list_resource_templates_exposes_all_three_templates()
     await test_read_single_rule_by_identifier_returns_full_yaml()
     await test_read_single_rule_unknown_identifier_raises()
     await test_read_duplicate_identifier_raises()
+    await test_technique_normalization_case_insensitive()
+    await test_technique_parent_matches_direct_and_subtechnique()
+    await test_technique_subtechnique_excludes_parent_and_siblings()
+    await test_technique_malformed_id_raises()
+    await test_coverage_status_covered()
+    await test_coverage_status_not_covered()
     print("\nAll tests passed.")
 
 

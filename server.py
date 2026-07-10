@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import tempfile
 import warnings
 from pathlib import Path
@@ -22,6 +23,9 @@ RULE_SUBDIRS = ("hayabusa", "sigma")
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 _MAX_RESOURCE_ROWS = 500
+_COVERAGE_SAMPLE_CAP = 20
+
+_TECHNIQUE_ID_RE = re.compile(r"^[Tt](\d{4})(\.(\d{3}))?$")
 
 
 SUMMARY_FIELDS = ("Timestamp", "RuleTitle", "Level", "Computer", "Channel", "EventID", "RecordID", "RuleID")
@@ -248,6 +252,89 @@ def _read_rule_yaml_by_id(rule_id: str) -> str:
     return (RULES_DIR / record["path"]).read_text(encoding="utf-8")
 
 
+def _normalize_technique_id(raw: str) -> tuple[str, bool]:
+    """Return (normalized_id, is_subtechnique) for a MITRE technique ID.
+
+    Case-insensitive; accepts a bare parent ("T1003") or a specific
+    sub-technique ("T1003.001"). Raises ValueError for anything else.
+    """
+    match = _TECHNIQUE_ID_RE.match(raw.strip()) if isinstance(raw, str) else None
+    if not match:
+        raise ValueError(f"Malformed MITRE technique ID: {raw!r}")
+    base, sub = match.group(1), match.group(3)
+    normalized = f"t{base}" + (f".{sub}" if sub else "")
+    return normalized, sub is not None
+
+
+def _rule_matches_technique(rule_tags: list[str], normalized: str, is_subtechnique: bool) -> str | None:
+    """Return "direct", "inherited_subtechnique", or None for a rule's tags
+    against a normalized technique ID.
+
+    A sub-technique query ("t1003.001") matches only that exact tag — never
+    its parent or sibling sub-techniques. A parent query ("t1003") matches
+    its own tag directly, and any more-specific sub-technique tag under it
+    as an inherited match, since MITRE defines sub-techniques as refinements
+    of the parent.
+    """
+    target = f"attack.{normalized}"
+    if is_subtechnique:
+        return "direct" if target in rule_tags else None
+    if target in rule_tags:
+        return "direct"
+    if any(t.startswith(target + ".") for t in rule_tags):
+        return "inherited_subtechnique"
+    return None
+
+
+def _matches_for_technique(raw_technique_id: str) -> tuple[str, list[dict]]:
+    normalized, is_subtechnique = _normalize_technique_id(raw_technique_id)
+    records, _, _ = _get_rule_index()
+    matches = []
+    for record in records:
+        tags = [str(t) for t in (record.get("tags") or [])]
+        match_type = _rule_matches_technique(tags, normalized, is_subtechnique)
+        if match_type is not None:
+            matches.append({**record, "match_type": match_type})
+    return normalized.upper(), matches
+
+
+def _rules_by_technique_payload(raw_technique_id: str) -> dict:
+    technique_id, matches = _matches_for_technique(raw_technique_id)
+    page = matches[:_MAX_RESOURCE_ROWS]
+    return {
+        "technique_id": technique_id,
+        "total_matches": len(matches),
+        "returned": len(page),
+        "truncated": len(matches) > len(page),
+        "rules": [
+            {
+                "resource_id": r["resource_id"],
+                "id_source": r["id_source"],
+                "title": r["title"],
+                "level": r["level"],
+                "match_type": r["match_type"],
+            }
+            for r in page
+        ],
+    }
+
+
+def _technique_coverage_payload(raw_technique_id: str) -> dict:
+    technique_id, matches = _matches_for_technique(raw_technique_id)
+    return {
+        "technique_id": technique_id,
+        "coverage": "covered" if matches else "not_covered",
+        "matching_rule_count": len(matches),
+        "sample_rule_ids": [r["resource_id"] for r in matches[:_COVERAGE_SAMPLE_CAP]],
+        "note": (
+            "ID and local rule-coverage facts only. This server does not bundle "
+            "an ATT&CK technique-name/tactic/description dataset, so no such "
+            "fields are included here — treat the absence of a technique name "
+            "as a known product gap, not an omission by mistake."
+        ),
+    }
+
+
 def _parse_detection_uri(uri) -> tuple[str, ...]:
     if uri.scheme != "detection":
         raise ValueError(f"Unsupported resource URI scheme: {uri.scheme!r}")
@@ -286,6 +373,29 @@ async def list_resource_templates() -> list[types.ResourceTemplate]:
             ),
             mimeType="application/yaml",
         ),
+        types.ResourceTemplate(
+            uriTemplate="detection://rules/by-technique/{technique_id}",
+            name="Rules by MITRE technique",
+            description=(
+                "Rules tagged with the given MITRE ATT&CK technique ID "
+                "(case-insensitive). A bare parent ID like T1003 also matches "
+                "sub-technique-tagged rules like T1003.001 (labeled "
+                "'inherited_subtechnique'); a sub-technique query like T1003.001 "
+                "matches only that exact tag, never its parent or siblings."
+            ),
+            mimeType="application/json",
+        ),
+        types.ResourceTemplate(
+            uriTemplate="detection://attack/techniques/{technique_id}",
+            name="Local technique coverage",
+            description=(
+                "Local coverage facts (match count, covered/not_covered) for a "
+                "technique ID, computed only from the bundled rule set. Does "
+                "not include the technique's name/tactic — no ATT&CK dataset "
+                "is bundled in this server."
+            ),
+            mimeType="application/json",
+        ),
     ]
 
 
@@ -304,6 +414,14 @@ async def read_resource(uri: types.AnyUrl):
     if len(segments) == 2 and segments[0] == "rules":
         text = _read_rule_yaml_by_id(segments[1])
         return [ReadResourceContents(content=text, mime_type="application/yaml")]
+
+    if len(segments) == 3 and segments[:2] == ("rules", "by-technique"):
+        payload = _rules_by_technique_payload(segments[2])
+        return [ReadResourceContents(content=json.dumps(payload, indent=2), mime_type="application/json")]
+
+    if len(segments) == 3 and segments[:2] == ("attack", "techniques"):
+        payload = _technique_coverage_payload(segments[2])
+        return [ReadResourceContents(content=json.dumps(payload, indent=2), mime_type="application/json")]
 
     raise ValueError(f"Unknown resource URI: {uri}")
 
