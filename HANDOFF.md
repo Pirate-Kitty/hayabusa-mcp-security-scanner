@@ -39,9 +39,15 @@ The project was packaged as an unpacked Claude Desktop extension (MCPB manifest 
 
 ## Files created/modified
 
+> **Note:** this section reflects the initial two-tool implementation only. `server.py`
+> later grew two more tools (`analyze_coverage`, `suggest_rule`) and four `detection://`
+> resources, plus three more test files — see the dated sections below ("detection://
+> resources", "analyze_coverage and suggest_rule tools") for those additions, and the
+> "detection-engineering skill" entry at the end of this file for the most recent addition.
+
 - `download_hayabusa.sh` — downloads, checksum-verifies, and extracts Hayabusa into `./hayabusa/`
 - `hayabusa/` — extracted Hayabusa v3.10.0 release (binary, `config/`, `rules/`)
-- `server.py` — low-level MCP server (`hayabusa-mcp`); registers two tools:
+- `server.py` — low-level MCP server (`hayabusa-mcp`); at this point in the build, registered two tools:
   - `scan_evtx` (schema: `evtx_path` required; `min_severity`, `rule_filter`, `output_format`, `max_results` optional). `call_tool` runs `run_scan()`, which invokes the Hayabusa binary (`json-timeline -f <file> -L -o <tmp>.jsonl -m <min_severity> -w -q -K -N -C`, `cwd` set to `hayabusa/`), parses the resulting JSONL, applies `rule_filter`/`max_results`/`output_format` via `_filter_findings()`, and returns findings as a JSON text content block. Raises `FileNotFoundError` for a missing EVTX file or missing binary, and `RuntimeError` on a non-zero Hayabusa exit — both surface as proper MCP `isError` results.
   - `get_hayabusa_rules` (schema: optional `keyword`). `call_tool` runs `list_rules()`, which walks `hayabusa/rules/{hayabusa,sigma}/**/*.yml`, parses each with PyYAML, optionally filters by keyword, sorts by title, and returns the rule metadata as a JSON text content block.
 - `samples/CA_4624_4625_LogonType2_LogonProc_chrome.evtx` — one small (69KB) sample EVTX file used for local testing
@@ -129,9 +135,7 @@ New test suite `test_resources.py` (21 cases, all passing) exercises the actual 
 - **Tools and resources verified live, in-process**: `list_tools` still returns `scan_evtx`/`get_hayabusa_rules`, and `get_hayabusa_rules(keyword="mimikatz")` returns successfully (`isError=False`); `list_resources` returns `detection://rules`, `list_resource_templates` returns all three parameterized templates, and a live read of `detection://rules` succeeds.
 - **Repository confirmed safe to push**: `git status` clean; diff across all 4 commits scanned for emails, IPs, hostnames, secret/token/private-key patterns, and the local username/dirname — nothing found; commit author/committer and `Co-Authored-By` trailers use the repo's existing noreply addresses; only `server.py`, `test_resources.py`, `README.md`, `HANDOFF.md` were touched (no `__pycache__`, `.venv`, `hayabusa/`, `lib/`, `dist/`, or other generated artifacts committed); `.gitignore` remains adequate for this change.
 
-Remaining:
-1. Push `main` to `origin`
-2. Post-push verification — confirm the pushed commits appear correctly on the remote (`git log`/`git diff` against `origin/main` after push), and re-run the live tool/resource checks above against a fresh clone to confirm nothing depended on uncommitted local state
+(Push and post-push verification against `origin/main` were completed later in the build — see "Final live validation and project conclusion" at the end of this file for the resolved state.)
 
 ## Next step
 
@@ -140,8 +144,9 @@ The Claude Desktop extension is fully set up and confirmed working end-to-end: b
 Publication cleanup is complete: machine-specific paths and username scrubbed from tracked files, `lib/` untracked (regenerated via `package_extension.sh`), sample EVTX provenance documented, `LICENSE` and `README.md` added, and git history replaced with a single sanitized initial commit. The branch has been renamed to `main`, and the working tree is clean.
 
 Remaining:
-1. Create the empty GitHub repository and push `main`
-2. Write up a Medium article covering the build process
+1. Write up a Medium article covering the build process
+
+(The GitHub repository was created and `main` pushed later in the build — see "Final live validation and project conclusion" at the end of this file.)
 
 ## analyze_coverage and suggest_rule tools (2026-07-10)
 
@@ -156,7 +161,7 @@ Both tools are built on the same `_matches_for_technique()` helper already used 
 
 **Full regression suite: 41/41 tests passing** across all five test files (15 `test_resources.py` + 5 `test_get_hayabusa_rules.py` + 7 `test_scan_evtx.py` + 6 `test_analyze_coverage.py` + 8 `test_suggest_rule.py`). The two original tools (`scan_evtx`, `get_hayabusa_rules`) and all four existing resources were re-verified working, unchanged.
 
-**One new local commit** exists on `main`, one commit ahead of `origin/main`, not yet pushed. Diff scope confirmed limited to `server.py` (additive only) plus the two new test files; scanned for secrets, PII, credentials, tokens, and private paths — none found; no unexpected files included.
+**One new local commit** exists on `main`. Diff scope confirmed limited to `server.py` (additive only) plus the two new test files; no unexpected files included. (Same clean secrets/PII/credentials/tokens/private-paths scan as the pre-push review above — see that section for the full attestation; not repeated here.)
 
 **Known limitations (by design, not bugs):**
 - Coverage is strictly **binary** (`covered`/`not_covered`) in both tools. There is no partial/fractional/percentage coverage concept, and a `covered` result says nothing about detection quality, tuning, false-positive rate, or whether a matching rule is actually enabled in a given scan profile.
@@ -165,7 +170,8 @@ Both tools are built on the same `_matches_for_technique()` helper already used 
 Remaining:
 1. Final review
 2. Exit Claude Code
-3. Push `main` to `origin`
+
+(This commit was pushed to `origin/main` later in the build — see "Final live validation and project conclusion" at the end of this file for the resolved state.)
 
 ## Final live validation and project conclusion (2026-07-10)
 
@@ -175,3 +181,118 @@ Remaining:
 - No files were created or modified during the live tool tests.
 - Implementation and validation are complete.
 - The repository is clean and synchronized with `origin/main`.
+
+## detection-engineering skill (2026-07-10)
+
+**Status: implementation and verification complete.** Added a project-scoped skill at
+`.claude/skills/detection-engineering/`, packaging the rule-authoring workflow already
+supported by `analyze_coverage`/`suggest_rule`/`get_hayabusa_rules`/`scan_evtx` and the
+`detection://` resources. Files added:
+
+- `SKILL.md` — frontmatter with concrete activation triggers ("Sigma rule", "Hayabusa
+  detection rule", "MITRE ATT&CK coverage", "EVTX detection rule") plus a workflow doc:
+  check existing coverage first (`analyze_coverage`/`suggest_rule`), fill in a draft using
+  the schema reference, validate locally, confirm the rule fires via `scan_evtx`, re-check
+  coverage.
+- `scripts/validate_rule.py` — a local structural/schema validator (stdlib + the
+  already-declared `pyyaml` dependency only, no new installs). Checks required fields
+  (`title`, `id` as a real UUID, `logsource.product`, `detection` with a `condition` that
+  references a defined selection/filter block, `level`, `status`), mirroring the fields
+  `server.py`'s `list_rules()`/`_matches_for_technique()` already rely on so the two can't
+  drift apart. CLI: `python validate_rule.py <path-to-rule.yml>`, exit 0 with `VALID: ...`
+  or exit 1 with `INVALID: ...` plus a per-field reason list.
+- `reference/rule-schema.md` — field cheatsheet for both rule dialects bundled in this
+  repo (plain Sigma and Hayabusa-native).
+- `reference/mcp-tools.md` — summary of all four tools and four `detection://` resources,
+  referenced by function name (not line number, which drifts) so it stays accurate as
+  `server.py` changes.
+- `reference/example-rule.yml` — one minimal, hand-written, synthetic valid rule. Written
+  from scratch for the skill rather than copied from `hayabusa/rules/`, since that
+  directory is gitignored and won't exist in a fresh clone before `download_hayabusa.sh`
+  runs — the skill's own example is self-contained and doesn't depend on it.
+- `tests/test_validate_rule.py` + synthetic fixtures under `tests/fixtures/` — see test
+  results below.
+
+All new files live inside the skill directory itself (not repo root), per an explicit
+preference that the skill package stay self-contained and portable.
+
+**Bug found and fixed during testing:** the first draft of `validate_rule.py`'s
+condition-reference check used a plain substring match, so a `condition: "selection_typo"`
+was incorrectly accepted as referencing a `selection` block (the substring `"selection"`
+matches inside `"selection_typo"`). Caught by
+`test_condition_must_reference_a_defined_block`, then fixed to tokenize the condition
+string and compare whole words instead of substrings. Re-run confirmed the fix.
+
+**Documentation updates completed:**
+- `CLAUDE.md` — was stale since the project's original `scan_evtx`-only goal; now lists
+  all four tools (`scan_evtx`, `get_hayabusa_rules`, `analyze_coverage`, `suggest_rule`)
+  and the `detection://` resources, and points to the new skill.
+- `README.md` — was missing `analyze_coverage`/`suggest_rule` from both the intro and the
+  tool list even though they were already implemented; now documents all four tools and
+  links to the skill.
+- `HANDOFF.md` (this file) — the stale "Files created/modified" tool inventory was
+  annotated as reflecting only the initial two-tool state (with a pointer to the later
+  sections that added the rest); the four non-reconciled "push to origin" status blocks
+  accumulated across earlier dated sections were collapsed into single resolved
+  statements; the duplicated secrets/PII-scan attestations were merged into one.
+
+**Test results — new skill tests, `test_validate_rule.py` (6/6 passing):**
+
+```
+$ .venv/bin/python .claude/skills/detection-engineering/tests/test_validate_rule.py
+PASS: example_rule_is_valid
+PASS: missing_fields_rule_fails_with_clear_reasons
+PASS: malformed_yaml_fails_gracefully
+PASS: missing_file_reports_not_found
+PASS: condition_must_reference_a_defined_block
+PASS: unknown_level_is_flagged
+
+All tests passed.
+```
+
+Cases cover: a valid rule passes; a rule missing `id`/`detection`/`level` fails with a
+clear per-field reason; a rule with malformed/unparseable YAML fails gracefully without
+leaking a raw stack trace; a missing file is reported cleanly; a `condition` that doesn't
+reference any defined selection/filter block is caught; an unrecognized `level` value is
+flagged.
+
+**Full regression check — all 5 existing repo-root suites re-run after the skill was
+added, 41/41 passing, zero regressions:**
+
+```
+test_scan_evtx.py            — 7/7  passing
+test_get_hayabusa_rules.py   — 5/5  passing
+test_resources.py            — 15/15 passing
+test_analyze_coverage.py     — 6/6  passing
+test_suggest_rule.py         — 8/8  passing
+```
+
+`validate_rule.py` was also sanity-checked directly via its CLI: `VALID` (exit 0) against
+`reference/example-rule.yml`, and `INVALID` (exit 1, with clear per-field reasons) against
+both synthetic invalid fixtures.
+
+**Remaining limitations / follow-up items (by design, not defects):**
+- `validate_rule.py` checks structure only — it cannot confirm a rule's detection logic is
+  correct, low-noise, or that it will actually fire against real data. `scan_evtx` against
+  a real or sample EVTX is still required to confirm behavior, as the skill's own workflow
+  doc states.
+- The two known product gaps already documented above (binary-only coverage; no bundled
+  ATT&CK technique-name/tactic dataset) apply equally to this skill's guidance, and
+  `SKILL.md` explicitly tells the workflow not to paper over either one.
+- No CI/lint automation was added for the new skill files — `validate_rule.py` and its
+  tests are run manually, matching how the rest of this repo's tests are run today.
+- Skill activation itself (does the skill actually get picked up on a natural-language
+  detection-engineering request, without misfiring on unrelated prompts) was checked via
+  the CLI/test-suite paths above, not yet re-verified in a fresh interactive session — a
+  reasonable next manual check before relying on it day-to-day.
+
+**Sensitive-data check for this change:** every new/modified file (`SKILL.md`,
+`validate_rule.py`, the reference files, the tests and fixtures, and the `CLAUDE.md`/
+`README.md`/`HANDOFF.md` edits) was swept for credentials, tokens, API keys, private keys,
+real hostnames/usernames/IPs, and machine-specific absolute paths — none found. All example
+and fixture rule content is synthetic (invented titles/IDs/descriptions), consistent with
+the clean sensitive-data sweep already on record for the rest of this repository.
+`requirements.txt` was not modified — no new third-party dependency was introduced.
+
+**The repository is ready for final review and a checkpoint commit.** No commit has been
+made as part of this change.

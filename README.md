@@ -1,9 +1,9 @@
 # hayabusa-mcp
 
 An MCP (Model Context Protocol) server that wraps [Hayabusa](https://github.com/Yamato-Security/hayabusa)
-for EVTX (Windows Event Log) analysis, exposing `scan_evtx` and `get_hayabusa_rules`
-tools, plus read-only `detection://` resources for browsing the bundled Sigma
-rule set (see [Resources](#resources) below).
+for EVTX (Windows Event Log) analysis, exposing `scan_evtx`, `get_hayabusa_rules`,
+`analyze_coverage`, and `suggest_rule` tools, plus read-only `detection://` resources
+for browsing the bundled Sigma rule set (see [Resources](#resources) below).
 
 > **Note:** this README covers licensing and the Claude Desktop extension build
 > step. Full setup/usage documentation is still in progress — see `HANDOFF.md`
@@ -15,9 +15,24 @@ rule set (see [Resources](#resources) below).
 2. `pip install -r requirements.txt` (or use a `.venv`)
 3. Connect via `.mcp.json` (Claude Code) or as a Claude Desktop extension (see below)
 
+## Tools
+
+- **`scan_evtx`** — runs Hayabusa against an EVTX file and returns findings as
+  structured JSON, filterable by severity level.
+- **`get_hayabusa_rules`** — lists/searches the bundled Hayabusa and Sigma
+  detection rules by keyword.
+- **`analyze_coverage`** — given a batch of MITRE ATT&CK technique IDs, reports
+  binary local coverage (`covered`/`not_covered`) against the bundled rule set.
+- **`suggest_rule`** — given one MITRE ATT&CK technique ID, returns existing
+  matching rules if already covered, or a read-only draft rule template
+  (never written to disk) if not.
+
+A project-scoped skill at `.claude/skills/detection-engineering/` packages the
+rule-authoring workflow built on these tools — see that directory for details.
+
 ## Resources
 
-Alongside the two tools, the server exposes four read-only `detection://` MCP
+Alongside the tools above, the server exposes four read-only `detection://` MCP
 resources for browsing the bundled Sigma/Hayabusa rule set and looking up
 MITRE ATT&CK technique coverage:
 

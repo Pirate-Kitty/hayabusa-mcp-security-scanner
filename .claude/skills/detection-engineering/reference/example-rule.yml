@@ -1,0 +1,25 @@
+title: Example - Suspicious Scheduled Task Creation
+id: 8f14e45f-ceea-4b8b-b6a3-000000000001
+status: experimental
+description: >
+  Minimal, hand-written example rule for the detection-engineering skill.
+  Flags creation of a scheduled task via schtasks.exe with a /create flag,
+  a common technique for establishing persistence. Synthetic example only —
+  not sourced from any real environment or incident.
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4698
+    CommandLine|contains: "/create"
+  condition: selection
+level: medium
+author: detection-engineering skill (example)
+tags:
+  - attack.t1053.005
+  - attack.persistence
+falsepositives:
+  - Legitimate scheduled-task administration by IT staff
+references:
+  - https://attack.mitre.org/techniques/T1053/005/

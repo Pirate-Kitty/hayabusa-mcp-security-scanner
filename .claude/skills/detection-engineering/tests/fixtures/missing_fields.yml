@@ -1,0 +1,8 @@
+# Synthetic fixture: intentionally missing id, detection, and level.
+title: Fixture - Missing Required Fields
+status: experimental
+description: Used only by test_validate_rule.py to exercise the missing-field path.
+logsource:
+  product: windows
+tags:
+  - attack.t9999

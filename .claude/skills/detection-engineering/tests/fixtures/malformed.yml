@@ -1,0 +1,4 @@
+# Synthetic fixture: intentionally malformed YAML (unbalanced flow mapping).
+title: Fixture - Malformed YAML
+detection: {selection: {EventID: 4698}, condition: selection
+level: medium
