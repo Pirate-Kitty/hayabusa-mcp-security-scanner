@@ -296,3 +296,88 @@ the clean sensitive-data sweep already on record for the rest of this repository
 
 **The repository is ready for final review and a checkpoint commit.** No commit has been
 made as part of this change.
+
+## investigate-evtx command (2026-07-12)
+
+**Status: implementation and initial verification complete; not yet committed.** Added the
+first project-level slash command, `.claude/commands/investigate-evtx.md`, which drives the
+existing four MCP tools plus the `detection://` resources to turn an EVTX scan into an
+Obsidian-compatible investigation note under `investigations/`.
+
+**Binding decisions (confirmed with the user before implementation):**
+- Invocation: `/investigate-evtx <evtx-path> [severity]`.
+- Default `min_severity` is `medium`; an optional override is normalized (trim + lowercase)
+  and validated against the exact `scan_evtx` enum (`informational|low|medium|high|critical`)
+  *before* any scan call — invalid values are rejected with no tool call made.
+- Output lives under `investigations/` at repo root; `.gitignore` was updated (one-time,
+  separate change: a single added line, `investigations/`) since notes can contain real
+  hostnames/usernames/IPs/process paths pulled from analyzed EVTX files.
+- "Related Investigations" is populated only by **verified** exact overlap on at least one
+  MITRE technique ID or RuleID between the current run and existing `investigations/*.md`
+  frontmatter (`techniques:`/`rule_ids:` keys) — never a fuzzy/title-based match, and never
+  same-source-file alone.
+
+**Key design fact discovered during planning (not assumed):** `scan_evtx` findings carry
+only a `RuleID`, never MITRE tags directly. The command resolves
+`RuleID -> attack.* tags` via `ReadMcpResourceTool` against `detection://rules/{RuleID}`
+(exact-ID resource lookup), added to `allowed-tools` alongside the four
+`mcp__hayabusa-mcp__*` tools, rather than a keyword-search-then-filter through
+`get_hayabusa_rules` (less precise, since rule titles aren't guaranteed unique across
+~4,960 bundled rules).
+
+**Verification performed (manual walkthrough of the command's own steps, tool-by-tool,
+against `samples/CA_4624_4625_LogonType2_LogonProc_chrome.evtx`):**
+
+| Test | Result |
+|---|---|
+| Low-severity override (`... low`) | PASS — 1 finding, `RuleID e87bd730-df45-4ae9-85de-6c75369c5d29`. Rule's `tags:` list is empty; correctly reported as "no ATT&CK tags for this rule," and `analyze_coverage` correctly **skipped** (its schema requires `minItems:1`) rather than called with an empty list. |
+| Invalid severity (`... bogus`) | PASS — rejected with the exact usage/enum message, before any `scan_evtx` call. |
+| Mixed-case severity (`... Medium`) | PASS — normalized to `medium` and accepted. |
+| Medium (default) severity | PASS — 0 findings (sample's only event is `low`-level); handled as a non-error, audit-trail note written rather than treated as a failure. |
+| Filename collision | PASS — second note (`...-2.md`) correctly suffixed rather than overwriting the first. |
+| `.gitignore` exclusion | PASS — both generated notes confirmed `!!` (ignored) via `git status --ignored`, never staged/tracked. |
+
+Generated during verification: `investigations/2026-07-12-CA_4624_4625_LogonType2_LogonProc_chrome.md`
+(low-severity run) and `investigations/2026-07-12-CA_4624_4625_LogonType2_LogonProc_chrome-2.md`
+(medium-severity run) — both git-ignored, neither committed.
+
+**Full regression check — all 6 existing suites re-run after this change, 41/41 passing,
+zero regressions** (`test_scan_evtx.py` 7/7, `test_get_hayabusa_rules.py` 5/5,
+`test_analyze_coverage.py` 6/6, `test_suggest_rule.py` 8/8, `test_resources.py` 15/15,
+skill's `test_validate_rule.py` 6/6). No test files were added or modified for the new
+command, since it is a prompt/instruction file, not executable Python — there is nothing in
+`server.py` for it to exercise via the existing test convention.
+
+**Not yet verified (remaining step, flagged not hand-waved):** the bundled sample has no
+rule with real `attack.*` tags, so the full happy path — a finding resolving to a real
+technique, `analyze_coverage` returning `covered` results, and two notes cross-referencing
+each other via a verified technique/RuleID overlap producing an actual `[[wikilink]]` — has
+not been exercised end-to-end. Confirmed as a working reference point only
+(`get_hayabusa_rules(keyword="Important Log File Cleared")` -> tags
+`[attack.defense-evasion, attack.t1070.001]`; `analyze_coverage(["T1070.001"])` ->
+`covered`, `matching_rule_count: 4`), not run through the command itself. Needs a
+tagged-rule-triggering EVTX (real or synthetic) to close out.
+
+**Other known, by-design limitations carried over from existing tools/resources** (not new):
+binary-only coverage; no bundled ATT&CK technique-name/tactic dataset, so every
+`[[Txxxx]]` wikilink in a generated note is expected to render as unresolved/orphan in
+Obsidian unless the user's vault separately maintains per-technique pages. The command's own
+body text calls this out inline rather than papering over it.
+
+**Sensitive-data check for this change:** `.claude/commands/investigate-evtx.md` and the
+`.gitignore` addition were swept for credentials, tokens, API keys, private keys, real
+hostnames/usernames/IPs, and machine-specific absolute paths — none found (confirmed via
+targeted grep, no matches). The two generated `investigations/*.md` test notes contain only
+fields already present in the repo's own public/synthetic sample fixture (e.g.
+`Computer: MSEDGEWIN10`, a known SANS-style sample artifact) — not real incident data — and
+are git-ignored regardless.
+
+**The repository is ready for staged-diff review and a checkpoint commit.** No commit has
+been made as part of this change.
+
+**Post-staging update:** `.gitignore`, `HANDOFF.md`, and `.claude/commands/investigate-evtx.md`
+were staged via `git add` and the full staged diff (`git diff --cached`) was reviewed for
+secrets, tokens, credentials, usernames, email addresses, private/machine-specific paths,
+sensitive log data, and unrelated changes — no concerns found; every hunk was attributable to
+one of the three intended files. Generated `investigations/*.md` test notes remain confirmed
+`!!` (git-ignored), never staged. No commit has been made.
