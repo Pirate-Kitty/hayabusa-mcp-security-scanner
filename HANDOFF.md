@@ -381,3 +381,187 @@ secrets, tokens, credentials, usernames, email addresses, private/machine-specif
 sensitive log data, and unrelated changes — no concerns found; every hunk was attributable to
 one of the three intended files. Generated `investigations/*.md` test notes remain confirmed
 `!!` (git-ignored), never staged. No commit has been made.
+
+## /triage command and techniques/ knowledge base (2026-07-13)
+
+**Status: implementation and manual verification complete; not yet committed.**
+
+Added a second project-level slash command, `.claude/commands/triage.md`, alongside a new
+tracked directory convention, `techniques/`, for reusable MITRE ATT&CK technique reference
+notes. No new skill was created — `.claude/skills/` still contains only the pre-existing
+`detection-engineering` skill.
+
+**Classification:** both `/investigate-evtx` and `/triage` are project-level slash
+commands — plain Markdown files under `.claude/commands/`, each with
+`description`/`argument-hint`/`allowed-tools` frontmatter, interpreted as instructions at
+runtime rather than executable code. Neither has, or can have, an automated test in this
+repo's existing convention (test files exercise `server.py`'s registered MCP handlers
+directly; a slash command has no equivalent handler to invoke programmatically — confirmed
+this build when invoking `/triage` via the generic `Skill` tool with a positional `args`
+string did not perform `$1`/`$2`/`$3` substitution, unlike a human typing the command
+directly at the interactive prompt).
+
+**Purpose and how the two commands differ:**
+- `/investigate-evtx <evtx-path> [severity]` (existing, unchanged) — scans an EVTX file,
+  resolves ATT&CK tags, and writes a general investigation note under `investigations/`,
+  cross-linking prior investigations on verified technique/RuleID overlap.
+- `/triage <evtx-path> [severity] [case-id]` (new) — runs the same
+  scan → resolve-tags → coverage pipeline, but adds an optional case ID, requires assigning
+  exactly one triage outcome (`escalate`, `investigate`, `investigate further`,
+  `likely benign`, `insufficient evidence`), writes to a separate `investigations/triage/`
+  directory, cross-links against three corpora (other triage notes, `/investigate-evtx`
+  notes, and technique notes) instead of one, and additionally syncs a tracked
+  `techniques/<ID>.md` reusable knowledge-base note for every technique it resolves.
+  `/investigate-evtx` remains the lighter-weight, general note-taking workflow; `/triage` is
+  the case-oriented, outcome-driven workflow with an aggregate cross-case knowledge base as a
+  side effect.
+
+**MCP tools/resources used (identical set for both commands, nothing new added):**
+`mcp__hayabusa-mcp__scan_evtx`, `get_hayabusa_rules`, `analyze_coverage`, `suggest_rule`,
+plus `ReadMcpResourceTool` against `detection://rules/{RuleID}`,
+`detection://rules/by-technique/{id}`, and `detection://attack/techniques/{id}`, and the
+built-in `Read`/`Write`/`Glob` tools for note I/O.
+
+**Binding decisions on `/triage`'s arguments (confirmed with the user before
+implementation):**
+- Default `min_severity` is `medium`, same as `/investigate-evtx`.
+- An optional severity override is trimmed, lowercased, and validated against the exact
+  `scan_evtx` enum (`informational|low|medium|high|critical`) *before* any scan call; a
+  non-matching value is rejected outright with no tool call made.
+- An optional `case_id` (third argument) must match `^[A-Za-z0-9_-]{1,64}$` exactly —
+  letters, digits, hyphens, underscores only. Anything else (path separators, `..`
+  traversal, whitespace, shell metacharacters, `@`/email-shaped values) is **rejected
+  outright, before any scan call** — never silently stripped or sanitized. When present and
+  valid, `case_id` becomes both a filename prefix
+  (`investigations/triage/<case_id>-<YYYY-MM-DD>-<evtx-basename>.md`) and a frontmatter
+  field.
+
+**Output-location decision:** `investigations/triage/` needed **no new `.gitignore`
+entry** — the existing bare `investigations/` rule (added for `/investigate-evtx`, see the
+2026-07-12 section above) already ignores the whole subtree recursively. Confirmed directly
+via `git check-ignore -v`.
+
+**`techniques/` — new tracked knowledge-base directory:**
+- Unlike every other generated artifact in this repo so far, `techniques/<TechniqueID>.md`
+  is **tracked in git**, not ignored — a deliberate, confirmed decision to make it a shared,
+  reusable ATT&CK reference.
+- Permitted content only: technique ID, technique name/tactic placeholders (never invented —
+  no ATT&CK name/tactic dataset is bundled anywhere in this project), related Rule
+  IDs/titles/levels, aggregate coverage status, and reusable/generic analyst guidance.
+- Explicitly forbidden, enforced structurally in the command (technique-note content is
+  sourced only from `get_hayabusa_rules`/`detection://rules/by-technique`/`analyze_coverage`/
+  `detection://attack/techniques`, never from a `scan_evtx` finding field): case-specific
+  data, raw event fields, hostnames, usernames, private paths, timestamps from
+  investigations, credentials, secrets, or other PII. A "Linked Investigations" field is a
+  bare aggregate count, never a filename, date, case ID, or link back to a specific
+  (gitignored) investigation/triage note — content flows one way, from case-specific notes
+  into the generic knowledge base, never the reverse.
+
+**Cross-referencing rule (same discipline as `/investigate-evtx`, extended to three
+corpora):** a triage note links to another triage note, an investigation note, or a
+technique note only on a **verified, exact, case-insensitive match** on at least one MITRE
+technique ID or RuleID between frontmatter fields — never a fuzzy or title-based match, and
+never same-source-file alone. Technique notes never link back to specific investigations.
+
+**Managed-section sync / non-destructive update behavior:** each `techniques/<ID>.md` has
+machine-owned sections (`## Related Rules`, `## Coverage Status`, `## Linked Investigations`
+count) that are fully replaced on every sync, and human-owned fields/sections
+(`technique_name`, `tactic` frontmatter, `## Analyst Notes`) that are set once at file
+creation and never rewritten afterward. Update logic operates by locating fixed
+`## <Heading>` anchor lines and replacing only the recognized machine-owned ranges, leaving
+everything else byte-identical.
+
+**Verification performed — six manual dry-run tests, plus direct file-mechanics
+verification (no automated harness exists for slash-command behavior; see below):**
+
+| Test | What it validated | Result |
+|---|---|---|
+| 1. Default severity, no case ID | Zero-finding path; `insufficient evidence` outcome; no-case-ID filename scheme | PASS |
+| 2. `low` severity, no case ID | One-finding path with no ATT&CK tags; `likely benign` outcome; verified-overlap cross-link to the existing `/investigate-evtx` note by RuleID (and correct *exclusion* of the non-overlapping sibling note) | PASS |
+| 3. `low` severity + case ID | Case-ID filename prefix + frontmatter field; triage-to-triage cross-linking | PASS |
+| 4. Case ID = path-traversal string | Rejected before any scan call, zero tool calls made | PASS |
+| 5. Four further malformed case IDs (path separator, whitespace, email address, shell metacharacters) | Same reject-before-scan behavior across the full forbidden-character space | PASS |
+| 6. Exact re-run of test 3 | Filename collision correctly resolved with a `-2` suffix rather than overwriting; cross-linking scaled to multiple overlapping prior notes | PASS |
+
+Separately (since the bundled sample EVTX only ever triggers a rule with no ATT&CK tags, so
+the six dry-run tests above could not exercise the `techniques/` sync path), the sync
+algorithm's file mechanics were verified directly, without a live scan, using a
+hand-selected real bundled rule/technique pair — `T1134.005` (rule
+`5335aea0-f1b4-e120-08b6-c80fe4bf99ad`, "Addition of SID History to Active Directory
+Object"), chosen specifically for a clean 1:1 technique-to-rule mapping (`analyze_coverage`
+reports exactly 1 matching rule, `covered`): first-time creation (including confirming
+`Write` auto-creates the `techniques/` parent directory), a second sync correctly
+incrementing the aggregate count and refreshing the machine-owned sections, a hand-edit of
+the Analyst Notes section with synthetic guidance text to simulate real analyst content, and
+a third sync confirming that hand-edited section plus the technique-name/tactic placeholders
+came back byte-for-byte unchanged. A subsequent content sweep of the generated file for
+hostnames, usernames, timestamps, paths, and other sensitive patterns found nothing.
+
+**Temporary test artifacts removed:** all four generated `investigations/triage/*.md` notes
+from the six dry-run tests and the one `techniques/*.md` file used for direct
+sync-mechanics verification were deleted after review and explicit approval, since their
+content (fabricated aggregate counts, synthetic analyst text, test-only case IDs) did not
+reflect real usage. `investigations/triage/` and `techniques/` are both currently empty;
+they will be recreated automatically the next time either command actually writes to them.
+
+**Full regression check — automated components:** all 6 existing suites re-run after this
+change, **47/47 passing, zero regressions** (`test_scan_evtx.py` 7/7,
+`test_get_hayabusa_rules.py` 5/5, `test_resources.py` 15/15, `test_analyze_coverage.py` 6/6,
+`test_suggest_rule.py` 8/8, skill's `test_validate_rule.py` 6/6). This confirms the MCP
+server logic underlying both slash commands — every tool and resource `/triage` and
+`/investigate-evtx` compose — is unaffected. No test files were added or modified for
+`/triage` itself, for the same reason as `/investigate-evtx`: it's a prompt/instruction
+file, not executable Python, so there's nothing in `server.py` for a new test to exercise.
+
+**Manually verified, not automated (no slash-command test harness exists in this repo):**
+all `/triage`-specific behavior — argument parsing and case-ID validation, severity
+default/override/rejection, outcome assignment, verified-overlap cross-linking across three
+corpora, filename collision handling, and the entire `techniques/` create/update/preserve
+sync algorithm — was validated by manually walking through the command's own documented
+steps and calling the same underlying MCP tools/resources directly, exactly as
+`/investigate-evtx` was validated when it was first built (see the 2026-07-12 section
+above).
+
+**Remaining limitations / optional future work (by design, not defects):**
+- The "investigate" vs. "investigate further" outcome boundary has no deterministic
+  tie-break beyond "pick the conservative option and record the alternative" — different
+  runs may reasonably disagree on a borderline case.
+- No locking/atomicity: `Glob`-then-`Write` and `Read`-then-`Write` are not transactional,
+  so a concurrent `/triage` run touching the same `techniques/<ID>.md` could lose an update
+  (last-write-wins). Inherent to prompt-orchestrated file operations, not solved here.
+- `techniques/<ID>.md`'s `linked_investigations_count` is an approximate aggregate signal
+  (it counts qualifying `/triage` runs, not deduplicated unique investigations — re-running
+  `/triage` on the same EVTX increments it again), a deliberate tradeoff to avoid storing
+  any identifying key that could leak gitignored-investigation details into the tracked
+  file.
+- The "never copy a `scan_evtx` finding field into `techniques/`" rule is enforced by
+  instruction within the command file, not by code — worth an occasional manual spot-check
+  of `techniques/*.md` before pushing, same spirit as this repo's existing pre-commit
+  sensitive-data sweeps.
+- No pruning/archival mechanism exists for `techniques/` notes over time; out of scope for
+  this change.
+- The mixed covered/not_covered, multi-severity "investigate vs. investigate further"
+  scenario (one of the originally planned test cases) was not exercised, since no fixture
+  EVTX matching that pattern was available — a reasonable follow-up if a richer sample
+  becomes available.
+
+**Sensitive-data check for this change:** `.claude/commands/triage.md` was swept for
+credentials, tokens, API keys, private keys, real hostnames/usernames/IPs, and
+machine-specific absolute paths — none found. All test artifacts generated during
+verification (case IDs, technique/rule identifiers, synthetic analyst text) were synthetic,
+not real case data, and have since been deleted; none were committed.
+
+**The repository is ready for diff review and a checkpoint commit.** No commit has been
+made as part of this change.
+
+**Next steps (checkpoint):**
+1. Review the full diff (`git diff` / `git status`).
+2. Restage `HANDOFF.md` after this update (`git add HANDOFF.md`) alongside
+   `.claude/commands/triage.md`.
+3. Review the staged diff (`git diff --cached`) for secrets, tokens, credentials,
+   usernames, emails, private paths, and unrelated changes.
+4. Commit.
+5. Verify (confirm `git status` is clean and the commit contains only the intended files).
+6. Exit Claude Code.
+7. Push `main` to `origin` from the regular terminal, to maintain this repo's established
+   manual-push workflow.
