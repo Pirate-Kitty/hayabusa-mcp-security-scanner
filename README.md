@@ -30,6 +30,132 @@ for browsing the bundled Sigma rule set (see [Resources](#resources) below).
 A project-scoped skill at `.claude/skills/detection-engineering/` packages the
 rule-authoring workflow built on these tools — see that directory for details.
 
+## Slash commands
+
+- **`/investigate-evtx <evtx-path> [severity]`** — scans an EVTX file,
+  resolves findings to MITRE ATT&CK tags, and writes a general
+  investigation note under `investigations/` (gitignored), cross-linking
+  prior investigations on verified technique/RuleID overlap.
+- **`/triage <evtx-path> [severity] [case-id]`** — the case-oriented
+  counterpart: same scan → resolve-tags → coverage pipeline, plus a
+  required triage outcome (`escalate`, `investigate`, `investigate
+  further`, `likely benign`, `insufficient evidence`), writing to
+  `investigations/triage/` (gitignored) and syncing reusable
+  `techniques/<TechniqueID>.md` knowledge-base notes (tracked in git,
+  case-data-free by design).
+
+See `.claude/commands/investigate-evtx.md` and `.claude/commands/triage.md`
+for the full step-by-step each command follows.
+
+## Hooks
+
+Three Claude Code hooks live under `.claude/hooks/` and are registered in
+`.claude/settings.json`:
+
+- **SessionStart** — read-only prerequisite check (Hayabusa binary present
+  and executable, `pyyaml` importable, `hayabusa-mcp` enabled), surfaced as
+  context at the start of a session.
+- **PreToolUse** (`Write`/`Edit`) — denies writes to sensitive paths:
+  repo-internal/vendored directories (`.git/`, `hayabusa/`, `lib/`), the
+  hook config itself (`.claude/settings*.json`), credential directories
+  (`.ssh/`, `.aws/`, `.gnupg/`), credential/secret/key-shaped files
+  (`.env` and variants, `id_rsa` and friends, `credentials`/
+  `credentials.json`, `.npmrc`, `.netrc`, and `.pem`/`.key`/`.pfx`/`.p12`/
+  `.crt`/`.cer`), or anything resolving outside the project root. Directory
+  rules match at any depth, not just directly under the project root;
+  matching is case-insensitive.
+- **PostToolUse** (`Write`/`Edit`) — after a Sigma/Hayabusa rule YAML is
+  written or edited, re-runs the same validator the
+  `detection-engineering` skill uses (`validate_rule.py`) and reports any
+  structural errors back to Claude.
+
+None of these hooks can auto-approve a tool call — manual approval is
+unchanged for every file change and command except the narrow sensitive-path
+denylist above, which is a hard deny, not an auto-allow. To disable all
+hooks locally without touching the shared config, set
+`"disableAllHooks": true` in a personal, gitignored
+`.claude/settings.local.json`.
+
+### Prerequisites
+
+- Python 3 with `pyyaml` installed — already a project dependency (see
+  [Setup](#setup) above); `validate_rule_hook.py` and `session_start_check.py`
+  both import it.
+- A populated `.venv/` at `.venv/bin/python`. `.claude/settings.json` invokes
+  every hook as `${CLAUDE_PROJECT_DIR}/.venv/bin/python ...`, so if that
+  interpreter doesn't exist the hook command itself fails to launch (see
+  [Troubleshooting](#troubleshooting) below).
+- Nothing hook-specific requires `hayabusa/` to be downloaded — a missing or
+  non-executable Hayabusa binary is reported by `SessionStart` as a status
+  line, not treated as an error.
+
+### Hook setup
+
+No separate installation step: the three hooks are plain Python scripts
+under `.claude/hooks/`, already registered in the git-tracked
+`.claude/settings.json`. Completing this project's normal [Setup](#setup)
+(download Hayabusa, `pip install -r requirements.txt` into `.venv/`) is
+enough — Claude Code reads the `hooks` key automatically for any session
+started in this project directory, with no extra step to enable them.
+
+### Testing hooks
+
+Run the hook test suite directly (no pytest, same convention as every other
+test in this repo):
+
+```
+.venv/bin/python .claude/hooks/tests/test_hooks.py
+```
+
+This drives each hook's pure logic (`classify()`, `should_skip()`/
+`looks_like_rule()`, the `session_start_check` functions) directly rather
+than through stdin/stdout, matching how `test_scan_evtx.py` and the other
+repo-root suites are run.
+
+### Restarting after a hook change
+
+Claude Code's file watcher normally picks up edits to `.claude/settings.json`
+and the hook scripts mid-session. If a change doesn't seem to take effect,
+start a fresh Claude Code session in this directory to force a clean
+reload — the same operational caveat this project already documents for
+`server.py` changes and the MCP connection (see `HANDOFF.md`).
+
+### Troubleshooting
+
+- **A hook doesn't seem to fire at all:** confirm the interpreter exists
+  (`ls .venv/bin/python`) — a missing `.venv` makes the hook command fail
+  silently rather than raise a visible error. Re-run
+  `pip install -r requirements.txt` into `.venv/` if needed.
+- **`protect_sensitive_paths.py` blocks a file you expected to write:**
+  read the denial reason shown — it names the specific rule that matched
+  (a protected directory, a credential file name/extension, or "outside
+  the project root"). Treat an unexpected match as a denylist bug to fix,
+  not something to work around by disabling hooks project-wide.
+- **`validate_rule_hook.py` doesn't flag an invalid rule you just wrote:**
+  it only validates files inside the project root, outside `hayabusa/` and
+  any `tests/fixtures/` path, that look Sigma/Hayabusa-rule-shaped (a
+  `logsource` or `detection` key present) — a file lacking both keys looks
+  like "not a rule" to the heuristic and is silently skipped.
+- **Need to disable a hook temporarily:** set `"disableAllHooks": true` in
+  a personal `.claude/settings.local.json` (gitignored, machine-local)
+  rather than editing the shared `.claude/settings.json`.
+
+### Limitations
+
+- `protect_sensitive_paths.py` only covers `Write`/`Edit`. A `Bash` command
+  that mutates a sensitive path (`rm`, `mv`, shell redirection) isn't
+  covered by this hook — Claude Code's own manual approval for `Bash` still
+  applies regardless, so this is a defense-in-depth gap, not a missing
+  safeguard.
+- `validate_rule_hook.py`'s "does this look like a rule" check (a
+  `logsource` or `detection` key) is a heuristic, not a guarantee — it
+  could in principle miss an unusual rule dialect or flag an unrelated
+  YAML file that happens to define one of those keys.
+- Hooks are local automation, not a substitute for reviewing a diff
+  yourself before committing — see `HANDOFF.md` for the full
+  known-limitations list and this project's standing sensitive-data-sweep
+  practice.
+
 ## Resources
 
 Alongside the tools above, the server exposes four read-only `detection://` MCP
