@@ -566,6 +566,112 @@ made as part of this change.
 7. Push `main` to `origin` from the regular terminal, to maintain this repo's established
    manual-push workflow.
 
+## Stop hook: stop_notify.py (2026-07-14)
+
+**Status: implementation, registration, and verification complete; not yet
+committed.** Added a fourth Claude Code hook, `.claude/hooks/stop_notify.py`
+(`Stop` event), alongside the existing `SessionStart`/`PreToolUse`/
+`PostToolUse` hooks documented above, and registered it in
+`.claude/settings.json` as a new `"Stop"` key alongside the other three.
+
+**Binding decision (confirmed with the user before implementation):**
+`stop_notify.py` sends a fixed, generic desktop notification only — never
+anything derived from hook input. No prompt text, transcript content, file
+paths, or session/system details are ever passed to `notify-send`. This
+follows the same deny-only/no-new-trust-boundary spirit as the three
+existing hooks (see the 2026-07-14 "Hooks" section above), extended to a
+`Stop` hook: since `Stop` cannot use `permissionDecision` at all (it isn't a
+`PreToolUse` gate), the equivalent discipline here is "never leak, never
+block, never alter the turn."
+
+**What was added:**
+- `stop_notify.py` (`Stop`, matcher `""`) — on every stop, if `notify-send`
+  is on `PATH` (checked via `shutil.which`, never assumed installed) and the
+  debounce window has elapsed, sends a single fixed notification: `"Task
+  complete - review required"`. Uses the same `_common.py` helpers
+  (`read_hook_input`, `project_dir`) as the other three hooks, so project-root
+  resolution logic isn't duplicated a fourth time.
+  - **Debounce:** a 20-second minimum interval between notifications,
+    tracked via one small state file in the OS temp dir holding a single
+    float (the last-notified timestamp, nothing else). The filename is a
+    `sha256`-of-project-path hash truncated to 16 hex chars
+    (`claude-stop-notify-<hash>.state`), not the raw path — same
+    no-path-leak discipline already applied to `protect_sensitive_paths.py`'s
+    denial messages.
+  - **Never blocks, never alters the turn:** no `decision`/`continue` output
+    of any kind is ever emitted; exit code is unconditionally `0`, regardless
+    of whether `notify-send` succeeds, fails, times out, or is missing
+    entirely (`subprocess.run` failures are caught and swallowed, matching
+    the "advisory only" pattern of `session_start_check.py`).
+- `.claude/hooks/tests/test_hooks.py` — 7 new cases (32/32 -> 39/39),
+  covering `should_notify()`'s three branches (first run, within window,
+  after window), `state_file_path()` determinism and path-hashing, a
+  `write_last_notified()`/`read_last_notified()` round trip, the
+  missing-state-file case, and a fixed-literal guard on `NOTIFICATION_TEXT`.
+  `send_notification()` and `main()` are intentionally not unit-tested (real
+  subprocess/env dependent), matching how this repo already leaves
+  `validate_rule_hook.py`'s `main()` untested in favor of pure-function
+  coverage plus a manual live smoke test.
+- `README.md` — "Hooks" section updated from three hooks to four (new `Stop`
+  bullet), "Prerequisites" gained a `notify-send`-is-optional note, "Hook
+  setup" now documents all four hooks as registered, and "Testing hooks" now
+  lists the `stop_notify` functions the suite drives.
+- `HANDOFF.md` (this section).
+- `.claude/settings.json` — added a new `"Stop"` key inside the existing
+  `"hooks"` object, alongside `SessionStart`/`PreToolUse`/`PostToolUse`:
+
+```json
+"Stop": [
+  {
+    "matcher": "",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python ${CLAUDE_PROJECT_DIR}/.claude/hooks/stop_notify.py",
+        "timeout": 10
+      }
+    ]
+  }
+]
+```
+
+**Verification performed:**
+
+| Test | Result |
+|---|---|
+| `.claude/hooks/tests/test_hooks.py` (32/32 -> 39/39) | PASS |
+| Full existing regression suite (unaffected — no shared code paths changed) | PASS — 41/41 (`test_scan_evtx.py` 7/7, `test_get_hayabusa_rules.py` 5/5, `test_resources.py` 15/15, `test_analyze_coverage.py` 6/6, `test_suggest_rule.py` 8/8, skill's `test_validate_rule.py` 6/6) |
+| Live CLI smoke test, `stop_notify.py` via synthetic stdin JSON | PASS — exit 0, no stdout, `notify-send` present on this machine (`/usr/bin/notify-send`) and a hash-named state file (not the raw project path) was written with a timestamp, then cleaned up |
+
+**Known limitations (by design, not defects):**
+- Desktop-notification delivery itself (does the OS actually surface a
+  visible banner) depends on the user's notification daemon/session and
+  wasn't asserted beyond `notify-send` exiting without the hook script
+  itself erroring — outside this repo's ability to verify headlessly.
+- Like every other hook and test in this repo, there is no CI automation;
+  `test_hooks.py` is run manually.
+
+**Sensitive-data check for this change:** `stop_notify.py`, the
+`test_hooks.py` diff, and the `README.md`/`HANDOFF.md` edits were checked for
+credentials, tokens, private keys, real hostnames/usernames/emails, and
+machine-specific absolute paths — none found; the notification text is a
+fixed literal and no hook-input field is ever read into it.
+
+**The repository is ready for diff review and a checkpoint commit.** No
+commit has been made as part of this change.
+
+**Next steps (checkpoint):**
+1. Start a fresh Claude Code session (or trigger a hook reload) to confirm
+   the `Stop` hook fires and a real desktop notification appears.
+2. Review the full diff (`git diff` / `git status`).
+3. Stage `.claude/hooks/stop_notify.py`, `.claude/hooks/tests/test_hooks.py`,
+   `README.md`, `HANDOFF.md`, and `.claude/settings.json` together.
+4. Review the staged diff (`git diff --cached`) for secrets, tokens,
+   credentials, usernames, emails, private paths, and unrelated changes.
+5. Commit.
+6. Push `main` to `origin` from the regular terminal, per this repo's
+   established manual-push workflow.
+
 ## Hooks: SessionStart/PreToolUse/PostToolUse (2026-07-14)
 
 **Status: implementation and verification complete; not yet committed.** Added three Claude

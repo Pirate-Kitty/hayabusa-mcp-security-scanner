@@ -49,7 +49,7 @@ for the full step-by-step each command follows.
 
 ## Hooks
 
-Three Claude Code hooks live under `.claude/hooks/` and are registered in
+Four Claude Code hooks live under `.claude/hooks/` and are registered in
 `.claude/settings.json`:
 
 - **SessionStart** — read-only prerequisite check (Hayabusa binary present
@@ -68,6 +68,16 @@ Three Claude Code hooks live under `.claude/hooks/` and are registered in
   written or edited, re-runs the same validator the
   `detection-engineering` skill uses (`validate_rule.py`) and reports any
   structural errors back to Claude.
+- **Stop** — fires when Claude finishes responding and sends a fixed,
+  generic desktop notification (`notify-send`, if installed) reading
+  "Task complete - review required". The notification text is always a
+  literal, never built from hook input (no prompt, transcript, file path,
+  or session data is ever passed to `notify-send`); the only state written
+  is a single timestamp in the OS temp dir, named by a hash of the project
+  path rather than the raw path, used solely to debounce repeat
+  notifications within 20 seconds. Never blocks the stop and never alters
+  Claude's turn — exit code is always 0, with no `decision`/`continue`
+  output.
 
 None of these hooks can auto-approve a tool call — manual approval is
 unchanged for every file change and command except the narrow sensitive-path
@@ -88,15 +98,19 @@ hooks locally without touching the shared config, set
 - Nothing hook-specific requires `hayabusa/` to be downloaded — a missing or
   non-executable Hayabusa binary is reported by `SessionStart` as a status
   line, not treated as an error.
+- `notify-send` is optional, used only by `Stop`. If it isn't installed
+  (checked via `shutil.which`), the hook exits 0 with no notification and no
+  error — desktop notifications are a convenience, never a dependency.
 
 ### Hook setup
 
-No separate installation step: the three hooks are plain Python scripts
-under `.claude/hooks/`, already registered in the git-tracked
+No separate installation step: all four hooks are plain Python scripts under
+`.claude/hooks/`, already registered in the git-tracked
 `.claude/settings.json`. Completing this project's normal [Setup](#setup)
 (download Hayabusa, `pip install -r requirements.txt` into `.venv/`) is
 enough — Claude Code reads the `hooks` key automatically for any session
-started in this project directory, with no extra step to enable them.
+started in this project directory, with no extra step to enable any of
+them.
 
 ### Testing hooks
 
@@ -108,9 +122,10 @@ test in this repo):
 ```
 
 This drives each hook's pure logic (`classify()`, `should_skip()`/
-`looks_like_rule()`, the `session_start_check` functions) directly rather
-than through stdin/stdout, matching how `test_scan_evtx.py` and the other
-repo-root suites are run.
+`looks_like_rule()`, the `session_start_check` functions, and
+`stop_notify`'s `should_notify()`/`state_file_path()`/`read_last_notified()`/
+`write_last_notified()`) directly rather than through stdin/stdout, matching
+how `test_scan_evtx.py` and the other repo-root suites are run.
 
 ### Restarting after a hook change
 

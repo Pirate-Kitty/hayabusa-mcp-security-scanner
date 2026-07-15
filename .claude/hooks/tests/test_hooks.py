@@ -23,6 +23,13 @@ from session_start_check import (  # noqa: E402
     check_mcp_enabled,
     check_pyyaml,
 )
+from stop_notify import (  # noqa: E402
+    NOTIFICATION_TEXT,
+    read_last_notified,
+    should_notify,
+    state_file_path,
+    write_last_notified,
+)
 
 EXAMPLE_RULE = (
     REPO_ROOT / ".claude" / "skills" / "detection-engineering" / "reference" / "example-rule.yml"
@@ -276,6 +283,48 @@ def test_session_start_check_mcp_enabled():
     print("PASS: session_start_check_mcp_enabled")
 
 
+def test_stop_notify_should_notify_first_time():
+    assert should_notify(None, 1000.0) is True
+    print("PASS: stop_notify_should_notify_first_time")
+
+
+def test_stop_notify_should_notify_within_debounce_window():
+    assert should_notify(1000.0, 1005.0) is False
+    print("PASS: stop_notify_should_notify_within_debounce_window")
+
+
+def test_stop_notify_should_notify_after_debounce_window():
+    assert should_notify(1000.0, 1020.0) is True
+    print("PASS: stop_notify_should_notify_after_debounce_window")
+
+
+def test_stop_notify_state_file_path_deterministic_and_hash_based():
+    a = state_file_path(REPO_ROOT)
+    b = state_file_path(REPO_ROOT)
+    assert a == b, (a, b)
+    assert str(REPO_ROOT) not in str(a), a  # hashed, not the raw path
+    print("PASS: stop_notify_state_file_path_deterministic_and_hash_based")
+
+
+def test_stop_notify_write_then_read_last_notified_round_trip():
+    with tempfile.TemporaryDirectory() as tmp:
+        state_path = Path(tmp) / "state.txt"
+        write_last_notified(state_path, 42.5)
+        assert read_last_notified(state_path) == 42.5
+    print("PASS: stop_notify_write_then_read_last_notified_round_trip")
+
+
+def test_stop_notify_read_last_notified_missing_file_returns_none():
+    missing = Path(tempfile.gettempdir()) / "does-not-exist-claude-stop-notify.state"
+    assert read_last_notified(missing) is None
+    print("PASS: stop_notify_read_last_notified_missing_file_returns_none")
+
+
+def test_stop_notify_notification_text_is_fixed_literal():
+    assert NOTIFICATION_TEXT == "Task complete - review required"
+    print("PASS: stop_notify_notification_text_is_fixed_literal")
+
+
 def main():
     test_protect_sensitive_paths_denies_git()
     test_protect_sensitive_paths_denies_settings()
@@ -309,6 +358,13 @@ def main():
     test_session_start_check_pyyaml_ok()
     test_session_start_check_hayabusa_binary()
     test_session_start_check_mcp_enabled()
+    test_stop_notify_should_notify_first_time()
+    test_stop_notify_should_notify_within_debounce_window()
+    test_stop_notify_should_notify_after_debounce_window()
+    test_stop_notify_state_file_path_deterministic_and_hash_based()
+    test_stop_notify_write_then_read_last_notified_round_trip()
+    test_stop_notify_read_last_notified_missing_file_returns_none()
+    test_stop_notify_notification_text_is_fixed_literal()
     print("\nAll tests passed.")
 
 
