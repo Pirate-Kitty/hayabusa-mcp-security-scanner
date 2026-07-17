@@ -1,5 +1,12 @@
 # Handoff: hayabusa-mcp
 
+> **Status note:** this file is a chronological development log. Each dated
+> section below was written before its corresponding commit landed, so
+> phrases like "not yet committed" or "ready for a checkpoint commit" reflect
+> that section's moment in time, not the current state. As of commit
+> `7fdf9c1` ("Add privacy-safe Stop notifications"), all work described in
+> this file has been committed; no outstanding uncommitted work remains.
+
 ## Current project state
 
 The MCP server (`hayabusa-mcp`) is implemented, connected via `.mcp.json`, and confirmed working end-to-end through Claude Code — both `scan_evtx` and `get_hayabusa_rules` have been invoked live (via `mcp__hayabusa-mcp__scan_evtx` and `mcp__hayabusa-mcp__get_hayabusa_rules`) and return real Hayabusa results.
