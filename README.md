@@ -5,6 +5,12 @@ for EVTX (Windows Event Log) analysis, exposing `scan_evtx`, `get_hayabusa_rules
 `analyze_coverage`, and `suggest_rule` tools, plus read-only `detection://` resources
 for browsing the bundled Sigma rule set (see [Resources](#resources) below).
 
+## Project status
+
+This project is complete and is retained as a portfolio and educational
+reference. No additional feature development is currently planned; the
+sections below document its final setup, usage, and scope.
+
 ## Setup
 
 1. `./download_hayabusa.sh` — downloads and checksum-verifies the Hayabusa binary into `./hayabusa/`
@@ -37,6 +43,12 @@ hooks' own test suite (see [Testing hooks](#testing-hooks) below):
 .venv/bin/python test_resources.py
 .venv/bin/python test_analyze_coverage.py
 .venv/bin/python test_suggest_rule.py
+```
+
+The `detection-engineering` skill has its own test suite, run the same way:
+
+```
+.venv/bin/python .claude/skills/detection-engineering/tests/test_validate_rule.py
 ```
 
 ## Slash commands

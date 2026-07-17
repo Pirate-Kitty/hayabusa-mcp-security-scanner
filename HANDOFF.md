@@ -2,10 +2,15 @@
 
 > **Status note:** this file is a chronological development log. Each dated
 > section below was written before its corresponding commit landed, so
-> phrases like "not yet committed" or "ready for a checkpoint commit" reflect
-> that section's moment in time, not the current state. As of commit
-> `7fdf9c1` ("Add privacy-safe Stop notifications"), all work described in
-> this file has been committed; no outstanding uncommitted work remains.
+> recurring phrasing throughout — "not yet committed," "ready for a
+> checkpoint commit," "Status: ... not yet committed," and the numbered
+> "Next steps (checkpoint)" / "push `main` to `origin`" lists — reflects
+> that section's moment in time, not the current state. As of the current
+> state of `main`, every change described in this file has been committed;
+> no outstanding uncommitted or unpushed work remains. The project is now
+> complete — see the Project status section in `README.md`, which is the
+> primary, current-state guide; this file remains only as a historical
+> build log.
 
 ## Current project state
 
@@ -857,3 +862,30 @@ as part of this change.
 7. Exit Claude Code.
 8. Push `main` to `origin` from the regular terminal, to maintain this repo's established
    manual-push workflow.
+
+## Final documentation-closure pass (2026-07-17)
+
+**Status: complete.** This closure pass reworded this file's status banner
+(above) to stop pinning a specific commit hash, added a `Project status`
+section to `README.md` declaring the project complete and retained as a
+portfolio/educational reference with no further feature work planned,
+documented the previously-undocumented `detection-engineering` skill test
+file in README's `Testing` section, and re-ran the full test suite. No
+source or scanner code (`server.py`, hooks, skill scripts) was touched.
+
+**Test results (real, current run, all 7 suites):** 86/86 individual cases
+passing, zero failures — `test_scan_evtx.py` 7/7, `test_get_hayabusa_rules.py`
+5/5, `test_resources.py` 15/15, `test_analyze_coverage.py` 6/6,
+`test_suggest_rule.py` 8/8, `.claude/hooks/tests/test_hooks.py` 39/39,
+`.claude/skills/detection-engineering/tests/test_validate_rule.py` 6/6.
+
+**Privacy/secrets sweep:** all git-tracked files checked for credentials,
+tokens, emails, personal paths, internal hostnames, and temp-file paths —
+clean. The only personally-identifying string is the `Pirate-Kitty` author
+handle (`LICENSE`, `manifest.json`, and the extension ID in this file's
+"Claude Desktop extension setup" section above), which is intentional public
+attribution matching this repository's own author, not a leak.
+
+**`README.md` is now the accurate, primary public guide** to setup, usage,
+the four hooks, testing, scope, and known limitations; this file remains as
+historical build-log context only.
